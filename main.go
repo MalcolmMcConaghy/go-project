@@ -5,17 +5,20 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/joho/godotenv"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type Job struct {
+	ID        primitive.ObjectID `bson:"_id" json:"id,omitempty"`
 	Title     string
 	Company   string
 	Status    string
@@ -79,8 +82,12 @@ func main() {
 	}))
 
 	app.Get("/get-jobs", func(c *fiber.Ctx) error {
+		limit, err := strconv.ParseInt(c.Query("limit"), 10, 64)
 		coll := client.Database(DB).Collection(COLL)
-		cursor, err := coll.Find(context.TODO(), bson.D{})
+		findOptions := options.Find()
+		findOptions.SetSort(bson.D{{"updatedat", -1}})
+		findOptions.SetLimit(limit)
+		cursor, err := coll.Find(context.TODO(), bson.D{}, findOptions)
 		if err != nil {
 			panic(err)
 		}
@@ -98,6 +105,18 @@ func main() {
 		return c.JSON(results)
 	})
 
+	app.Get("/get-job/:id", func(c *fiber.Ctx) error {
+		coll := client.Database(DB).Collection(COLL)
+		id, err := primitive.ObjectIDFromHex(c.Params("id"))
+		filter := bson.D{{"_id", id}}
+		var result Job
+		err = coll.FindOne(context.TODO(), filter).Decode(&result)
+		if err != nil {
+			panic(err)
+		}
+		return c.JSON(result)
+	})
+
 	app.Post("/add-job", func(c *fiber.Ctx) error {
 		payload := struct {
 			Title   string `json:"title"`
@@ -110,8 +129,41 @@ func main() {
 		}
 
 		coll := client.Database(DB).Collection(COLL)
-		newJob := Job{Title: payload.Title, Company: payload.Company, Status: payload.Status, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+		newJob := Job{ID: primitive.NewObjectID(), Title: payload.Title, Company: payload.Company, Status: payload.Status, CreatedAt: time.Now(), UpdatedAt: time.Now()}
 		result, err := coll.InsertOne(context.TODO(), newJob)
+		if err != nil {
+			panic(err)
+		}
+		return c.JSON(result)
+	})
+
+	app.Post("/edit-job/:id", func(c *fiber.Ctx) error {
+		payload := struct {
+			Title   string `json:"title"`
+			Company string `json:"company"`
+			Status  string `json:"status"`
+		}{}
+
+		if err := c.BodyParser(&payload); err != nil {
+			return err
+		}
+
+		coll := client.Database(DB).Collection(COLL)
+		id, err := primitive.ObjectIDFromHex(c.Params("id"))
+		filter := bson.D{{"_id", id}}
+		update := bson.D{{"$set", bson.M{"title": payload.Title, "company": payload.Company, "status": payload.Status, "updatedat": time.Now()}}}
+		result, err := coll.UpdateOne(context.TODO(), filter, update)
+		if err != nil {
+			panic(err)
+		}
+		return c.JSON(result)
+	})
+
+	app.Delete("/delete-job/:id", func(c *fiber.Ctx) error {
+		coll := client.Database(DB).Collection(COLL)
+		id, err := primitive.ObjectIDFromHex(c.Params("id"))
+		filter := bson.D{{"_id", id}}
+		result, err := coll.DeleteOne(context.TODO(), filter)
 		if err != nil {
 			panic(err)
 		}
